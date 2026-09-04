@@ -14,14 +14,15 @@ let sweepTimer = null;
 function pushLog(inst,line){inst.logs.push(String(line));if(inst.logs.length>250)inst.logs=inst.logs.slice(-250);}
 function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
 async function waitReady(inst,timeout=180000){const start=Date.now();while(Date.now()-start<timeout){if(inst.proc?.exitCode!=null)throw new Error(`${inst.model.runtime||'runtime'} kapandı. ${inst.logs.slice(-10).join('\n')}`);try{const r=await fetch(`http://127.0.0.1:${inst.port}/health`);if(r.ok)return;}catch{}await sleep(350);}throw new Error(`${inst.model.runtime||'runtime'} zaman aşımına uğradı.`);}
-function normalizeLoadOptions(o={}){return {context:Number(o.context_length??o.context??o.ctx??8192),gpuLayers:Number(o.gpu_layers??o.gpuLayers??999),threads:o.threads?Number(o.threads):undefined,batch:Number(o.eval_batch_size??o.batch??512),ubatch:Number(o.ubatch??256),parallel:Number(o.parallel??1),flashAttention:o.flash_attention??o.flashAttention??true,kvOffload:o.offload_kv_cache_to_gpu??o.kvOffload??true,cacheTypeK:String(o.cache_type_k??o.cacheTypeK??'f16'),cacheTypeV:String(o.cache_type_v??o.cacheTypeV??'f16'),fit:o.fit!==false,embedding:Boolean(o.embedding),reranking:Boolean(o.reranking),ttl:o.ttl===0?0:Number(o.ttl||0),jit:Boolean(o.jit)};}
+function normalizeLoadOptions(o={}){return {context:Number(o.context_length??o.context??o.ctx??8192),gpuLayers:Number(o.gpu_layers??o.gpuLayers??999),threads:o.threads?Number(o.threads):undefined,batch:Number(o.eval_batch_size??o.batch??512),ubatch:Number(o.ubatch??256),parallel:Number(o.parallel??1),flashAttention:o.flash_attention??o.flashAttention??true,kvOffload:o.offload_kv_cache_to_gpu??o.kvOffload??true,cacheTypeK:String(o.cache_type_k??o.cacheTypeK??'f16'),cacheTypeV:String(o.cache_type_v??o.cacheTypeV??'f16'),fit:o.fit!==false,vramOnly:Boolean(o.vram_only??o.vramOnly??false),embedding:Boolean(o.embedding),reranking:Boolean(o.reranking),ttl:o.ttl===0?0:Number(o.ttl||0),jit:Boolean(o.jit)};}
 function argsFor(model,port,o){
   const args=['-m',model.localPath,'--host','127.0.0.1','--port',String(port),'--ctx-size',String(Math.max(512,o.context)),'--jinja','--reasoning-format','deepseek','--reasoning','auto','--parallel',String(Math.max(1,o.parallel)),'--batch-size',String(Math.max(32,o.batch)),'--ubatch-size',String(Math.max(16,o.ubatch)),'--cache-type-k',o.cacheTypeK,'--cache-type-v',o.cacheTypeV,'--flash-attn',o.flashAttention?'on':'off'];
-  if(o.gpuLayers!==0)args.push('-ngl',String(o.gpuLayers)); else args.push('-ngl','0');
+  const gpuLayers=o.vramOnly?999:o.gpuLayers;
+  if(gpuLayers!==0)args.push('-ngl',String(gpuLayers)); else args.push('-ngl','0');
   if(model.mmprojPath)args.push('--mmproj',model.mmprojPath);
   if(o.threads)args.push('--threads',String(o.threads));
   if(!o.kvOffload)args.push('--no-kv-offload');
-  if(o.fit)args.push('--fit','on');
+  if(o.fit&&!o.vramOnly)args.push('--fit','on');
   if(o.embedding)args.push('--embedding');
   if(o.reranking)args.push('--reranking');
   return args;
@@ -46,7 +47,7 @@ export async function loadModel(id,options={}){
   if(model.runtime==='transformers-python'){
     const python=await ensurePythonAiRuntime('transformers');
     const root=model.localDir||model.localPath;
-    const args=[workerPath('transformers_worker.py'),'--model',root,'--port',String(port)];if(o.embedding||model.embedding)args.push('--embedding');
+    const args=[workerPath('transformers_worker.py'),'--model',root,'--port',String(port)];if(o.embedding||model.embedding)args.push('--embedding');if(o.vramOnly)args.push('--vram-only');
     inst.proc=spawn(python,args,{windowsHide:true,stdio:['ignore','pipe','pipe']});
   }else{
     const exe=await ensureLlamaCpp();
@@ -63,5 +64,5 @@ export function touchModel(id,busy=false){const i=instances.get(id);if(i){i.last
 export function getInstance(id){return instances.get(id)||null;}
 export function instanceUrl(id){const i=getInstance(id);if(!i)throw new Error('Model yüklü değil.');return `http://127.0.0.1:${i.port}`;}
 export function runtimeState(){return {loadedModelId:[...instances.keys()][0]||null,running:instances.size>0,instances:[...instances.values()].map(describe)};}
-function describe(i){return {id:i.id,instance_id:i.id,status:'loaded',runtime:i.model.runtime,pid:i.proc?.pid||null,port:i.port,context:i.options.context,embedding:i.options.embedding,reranking:i.options.reranking,jit:i.jit,ttl:i.ttl,lastUsed:i.lastUsed,load_time_seconds:(Date.now()-i.startedAt)/1000,load_config:{context_length:i.options.context,eval_batch_size:i.options.batch,flash_attention:i.options.flashAttention,offload_kv_cache_to_gpu:i.options.kvOffload,gpu_layers:i.options.gpuLayers,parallel:i.options.parallel,cache_type_k:i.options.cacheTypeK,cache_type_v:i.options.cacheTypeV},logs:i.logs.slice(-50)};}
+function describe(i){return {id:i.id,instance_id:i.id,status:'loaded',runtime:i.model.runtime,pid:i.proc?.pid||null,port:i.port,context:i.options.context,embedding:i.options.embedding,reranking:i.options.reranking,jit:i.jit,ttl:i.ttl,lastUsed:i.lastUsed,load_time_seconds:(Date.now()-i.startedAt)/1000,load_config:{context_length:i.options.context,eval_batch_size:i.options.batch,flash_attention:i.options.flashAttention,offload_kv_cache_to_gpu:i.options.kvOffload,gpu_layers:i.options.vramOnly?999:i.options.gpuLayers,vram_only:i.options.vramOnly,parallel:i.options.parallel,cache_type_k:i.options.cacheTypeK,cache_type_v:i.options.cacheTypeV},logs:i.logs.slice(-50)};}
 export async function modelEstimate(id,options={}){const model=await getInstalled(id);if(!model)throw new Error('Model kurulu değil.');const hw=await hardwareInfo();return {hardware:hw,estimate:estimateModelMemory(model,{...normalizeLoadOptions(options),kvOffload:normalizeLoadOptions(options).kvOffload},hw)};}
