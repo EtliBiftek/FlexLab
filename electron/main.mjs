@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, Tray, nativeImage, utilityProcess, ipcMain, shell } from "electron";
+import { app, BrowserWindow, Menu, Tray, nativeImage, utilityProcess, ipcMain, shell, dialog } from "electron";
 import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +8,7 @@ let mainWindow = null;
 let tray = null;
 let daemon = null;
 let quitting = false;
+const nativeLogs = [];
 const managementToken = crypto.randomBytes(32).toString("hex");
 process.env.FLEXLAB_MANAGEMENT_TOKEN = managementToken;
 
@@ -21,8 +22,15 @@ app.on("second-instance", () => {
   }
 });
 
+function pushNativeLog(prefix, data) {
+  const text = String(data || "").trim();
+  if (!text) return;
+  nativeLogs.push(`${prefix}${text}`);
+  if (nativeLogs.length > 80) nativeLogs.splice(0, nativeLogs.length - 80);
+}
+
 function startDaemon() {
-  if (daemon) return;
+  if (daemon) return daemon;
   const serverPath = app.isPackaged
     ? path.join(process.resourcesPath, "app.asar.unpacked", "native", "server.mjs")
     : path.join(__dirname, "..", "native", "server.mjs");
@@ -31,14 +39,62 @@ function startDaemon() {
     stdio: "pipe",
     env: { ...process.env, FLEXLAB_MANAGEMENT_TOKEN: managementToken },
   });
-  daemon.stdout?.on("data", (data) => console.log(`[FlexLab native] ${data}`));
-  daemon.stderr?.on("data", (data) => console.error(`[FlexLab native] ${data}`));
-  daemon.on("exit", () => { daemon = null; });
+  daemon.stdout?.on("data", (data) => {
+    pushNativeLog("[stdout] ", data);
+    console.log(`[FlexLab native] ${data}`);
+  });
+  daemon.stderr?.on("data", (data) => {
+    pushNativeLog("[stderr] ", data);
+    console.error(`[FlexLab native] ${data}`);
+  });
+  daemon.on("exit", (code) => {
+    pushNativeLog("[exit] ", `code=${code}`);
+    daemon = null;
+  });
+  return daemon;
 }
 
 function stopDaemon() {
   daemon?.kill();
   daemon = null;
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function waitForNativeApi(timeoutMs = 20000) {
+  const started = Date.now();
+  let lastError = null;
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const response = await fetch("http://127.0.0.1:1234/api/server", {
+        headers: { "x-flexlab-management-token": managementToken },
+        signal: AbortSignal.timeout(1200),
+      });
+      if (response.ok) return true;
+      lastError = new Error(`HTTP ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    await sleep(180);
+  }
+  const log = nativeLogs.slice(-20).join("\n");
+  throw new Error(`FlexLab Native API başlatılamadı${lastError ? `: ${lastError.message || lastError}` : ""}${log ? `\n\n${log}` : ""}`);
+}
+
+async function bootNativeApi() {
+  let lastError = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    startDaemon();
+    try {
+      await waitForNativeApi(20000);
+      return;
+    } catch (error) {
+      lastError = error;
+      stopDaemon();
+      if (attempt === 0) await sleep(400);
+    }
+  }
+  throw lastError || new Error("FlexLab Native API başlatılamadı.");
 }
 
 function createWindow() {
@@ -55,6 +111,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      additionalArguments: [`--flexlab-management-token=${managementToken}`],
     },
   });
   mainWindow.setMenuBarVisibility(false);
@@ -144,19 +201,30 @@ ipcMain.handle("desktop:check-updates", () => checkGitHubRelease());
 ipcMain.handle("desktop:open-releases", () => shell.openExternal("https://github.com/EtliBiftek/FlexLab/releases/latest"));
 
 if (process.argv.includes("--smoke-test")) {
-  app.whenReady().then(() => {
-    console.log(JSON.stringify({ ok: true, app: "FlexLab", version: app.getVersion(), packaged: app.isPackaged }));
+  app.whenReady().then(async () => {
+    app.setAppUserModelId("com.pifo.flexlab");
+    await bootNativeApi();
+    console.log(JSON.stringify({ ok: true, app: "FlexLab", version: app.getVersion(), packaged: app.isPackaged, nativeApi: true }));
+    stopDaemon();
     app.exit(0);
   }).catch((error) => {
     console.error(error);
+    if (nativeLogs.length) console.error(nativeLogs.slice(-30).join("\n"));
+    stopDaemon();
     app.exit(1);
   });
 } else {
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     app.setAppUserModelId("com.pifo.flexlab");
-    startDaemon();
+    await bootNativeApi();
     createWindow();
     createTray();
+  }).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(message);
+    dialog.showErrorBox("FlexLab başlatılamadı", message);
+    stopDaemon();
+    app.exit(1);
   });
 }
 
