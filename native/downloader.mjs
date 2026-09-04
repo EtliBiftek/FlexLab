@@ -182,6 +182,7 @@ async function imageCompanions(model, dir, revision, job) {
 }
 
 export async function startDownload(model, quantId, options = {}) {
+  if (model?.controlJobId) return controlDownloadJob(model.controlJobId, model.controlAction, model.value);
   const cfg = await loadConfig();
   const revision = options.revision || cfg.hfRevision || 'main';
   const job = {
