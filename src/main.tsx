@@ -18,6 +18,7 @@ import {
   Upload,
 } from 'lucide-react';
 import './styles.css';
+import './runtime.css';
 import { Downloads, QuantDialog } from './download-ui';
 
 type Tab = 'chat' | 'discover' | 'models' | 'studio' | 'runtime' | 'server' | 'downloads';
@@ -377,19 +378,69 @@ function Models({ models, runtime, refresh, setErr }: { models: any[]; runtime: 
 }
 
 function Runtime({ state, refresh, setErr }: { state: any; refresh: () => Promise<void>; setErr: (s: string) => void }) {
-  const install = async (name: string) => {
-    try {
-      await api(`/api/runtimes/${encodeURIComponent(name)}`, { method: 'POST' });
-      await refresh();
-    } catch (e: any) {
-      setErr(e.message);
-    }
+  const [liveState, setLiveState] = useState<any>(state || {});
+
+  useEffect(() => {
+    setLiveState(state || {});
+  }, [state]);
+
+  useEffect(() => {
+    let alive = true;
+    const poll = async () => {
+      try {
+        const next = await api('/api/runtimes');
+        if (alive) setLiveState(next);
+      } catch {}
+    };
+    void poll();
+    const timer = setInterval(() => void poll(), 650);
+    return () => { alive = false; clearInterval(timer); };
+  }, []);
+
+  const install = (name: string) => {
+    void api(`/api/runtimes/${encodeURIComponent(name)}`, { method: 'POST' })
+      .then(async () => { await refresh(); })
+      .catch((e: any) => setErr(e.message));
   };
 
   return (
     <div className="page">
       <PageHeader title="Runtime" description="FlexLab'ın modelleri gerçekten çalıştırmak için kullandığı yerel motorlar." />
-      <div className="pageScroll padded"><div className="modelList">{Object.entries(state || {}).map(([name, value]: any) => <article className="modelRow" key={name}><div className="modelInfo"><div className="modelTitleLine"><h3>{name}</h3><Badge tone={value.installed ? 'ok' : ''}>{value.installed ? 'kurulu' : 'eksik'}</Badge></div><p className="monoPath">{value.path || 'Henüz kurulu değil'}</p></div>{!value.installed && <Button onClick={() => void install(name)}>Kur</Button>}</article>)}</div></div>
+      <div className="pageScroll padded">
+        <div className="modelList">
+          {Object.entries(liveState || {}).map(([name, value]: any) => {
+            const job = value?.job;
+            const active = !!job && !['done', 'error'].includes(job.status);
+            const showProgress = !!job && (active || job.status === 'error');
+            return (
+              <article className="modelRow runtimeRow" key={name}>
+                <div className="modelInfo runtimeInfo">
+                  <div className="modelTitleLine">
+                    <h3>{name}</h3>
+                    <Badge tone={value.installed ? 'ok' : ''}>{value.installed ? 'kurulu' : active ? 'kuruluyor' : 'eksik'}</Badge>
+                  </div>
+                  <p className="monoPath">{value.path || job?.phase || 'Henüz kurulu değil'}</p>
+                  {showProgress && (
+                    <div className={`runtimeInstallProgress ${job.status === 'error' ? 'bad' : ''}`}>
+                      <div className="runtimeProgressMeta">
+                        <span>{job.error || job.phase || 'Kuruluyor'}</span>
+                        <strong>%{Math.max(0, Math.min(100, Math.round(job.progress || 0)))}</strong>
+                      </div>
+                      <div className="progressTrack"><span style={{ width: `${Math.max(0, Math.min(100, job.progress || 0))}%` }} /></div>
+                      <div className="runtimeProgressStats">
+                        {job.totalBytes > 0 && <span>{bytes(job.loadedBytes)} / {bytes(job.totalBytes)}</span>}
+                        {job.speedBps > 0 && <span>{bytes(job.speedBps)}/s</span>}
+                        {job.detail && !job.error && <span className="runtimeDetail">{job.detail}</span>}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                {!value.installed && <Button onClick={() => install(name)} disabled={active}>{active ? 'Kuruluyor…' : job?.status === 'error' ? 'Tekrar dene' : 'Kur'}</Button>}
+              </article>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
