@@ -7,6 +7,11 @@ declare global {
       getInfo: () => Promise<{ version: string; openAtLogin: boolean; packaged: boolean }>;
       setOpenAtLogin: (enabled: boolean) => Promise<boolean>;
       checkUpdates: () => Promise<{ ok: boolean; version?: string | null; message?: string }>;
+      openReleases?: () => Promise<void>;
+      chooseModelPaths: () => Promise<string[]>;
+      importModelPaths: (paths: string[]) => Promise<any[]>;
+      updateModel: (id: string, patch: Record<string, any>) => Promise<any>;
+      getPathForFile: (file: File) => string;
     };
   }
 }
