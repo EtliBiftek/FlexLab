@@ -14,11 +14,16 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--model', required=True)
 parser.add_argument('--port', type=int, required=True)
 parser.add_argument('--embedding', action='store_true')
+parser.add_argument('--vram-only', action='store_true')
 args = parser.parse_args()
 
 MODEL_PATH = args.model
 IS_EMBEDDING = args.embedding
+VRAM_ONLY = args.vram_only
 DEVICE = 'cuda' if torch.cuda.is_available() else ('mps' if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() else 'cpu')
+
+if VRAM_ONLY and DEVICE != 'cuda':
+    raise RuntimeError("VRAM'e alma için CUDA destekli NVIDIA GPU gerekli.")
 
 processor = None
 tokenizer = None
@@ -35,20 +40,24 @@ try:
 except Exception:
     tokenizer = None
 
+cuda_map = {'': 0} if VRAM_ONLY else ('auto' if DEVICE == 'cuda' else None)
+
 if IS_EMBEDDING:
-    model = AutoModel.from_pretrained(MODEL_PATH, trust_remote_code=True, local_files_only=True, torch_dtype='auto')
+    model = AutoModel.from_pretrained(MODEL_PATH, trust_remote_code=True, local_files_only=True, torch_dtype='auto', device_map=cuda_map)
     mode = 'embedding'
 else:
     try:
         from transformers import AutoModelForImageTextToText
-        model = AutoModelForImageTextToText.from_pretrained(MODEL_PATH, trust_remote_code=True, local_files_only=True, torch_dtype='auto', device_map='auto' if DEVICE == 'cuda' else None)
+        model = AutoModelForImageTextToText.from_pretrained(MODEL_PATH, trust_remote_code=True, local_files_only=True, torch_dtype='auto', device_map=cuda_map)
         mode = 'vision'
     except Exception:
-        model = AutoModelForCausalLM.from_pretrained(MODEL_PATH, trust_remote_code=True, local_files_only=True, torch_dtype='auto', device_map='auto' if DEVICE == 'cuda' else None)
+        model = AutoModelForCausalLM.from_pretrained(MODEL_PATH, trust_remote_code=True, local_files_only=True, torch_dtype='auto', device_map=cuda_map)
         mode = 'causal'
 
 if DEVICE != 'cuda':
     model.to(DEVICE)
+elif IS_EMBEDDING and not getattr(model, 'hf_device_map', None):
+    model.to('cuda')
 model.eval()
 
 
@@ -172,7 +181,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == '/health':
-            return self.send_json(200, {'status': 'ok', 'runtime': 'transformers-python', 'mode': mode})
+            return self.send_json(200, {'status': 'ok', 'runtime': 'transformers-python', 'mode': mode, 'device': DEVICE, 'vram_only': VRAM_ONLY})
         return self.send_json(404, {'error': {'message': 'Not found'}})
 
     def do_POST(self):
@@ -213,5 +222,5 @@ class Handler(BaseHTTPRequestHandler):
 
 
 server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
-print(json.dumps({'ready': True, 'port': args.port, 'mode': mode}), flush=True)
+print(json.dumps({'ready': True, 'port': args.port, 'mode': mode, 'device': DEVICE, 'vram_only': VRAM_ONLY}), flush=True)
 server.serve_forever()
