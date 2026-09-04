@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "FlexLab — local multimodal AI studio, model manager, and OpenAI/LM Studio-compatible server.",
+  "author": "Pifo",
   "main": "electron/main.mjs",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 8080",
@@ -14,8 +15,8 @@
     "check:native": "node --check native/server.mjs && node --check native/llama-manager.mjs && node --check native/downloader.mjs && node --check native/image-manager.mjs && node --check native/mcp.mjs",
     "desktop": "electron .",
     "desktop:dev": "node scripts/desktop-dev.mjs",
-    "desktop:pack": "npm run build && electron-builder --dir",
-    "desktop:build": "npm run build && electron-builder --win nsis portable",
+    "desktop:pack": "npm run build && electron-builder --dir --publish never",
+    "desktop:build": "npm run build && electron-builder --win nsis portable --publish never",
     "test": "node --test scripts/*.test.mjs"
   },
   "dependencies": {
