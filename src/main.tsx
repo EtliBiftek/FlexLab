@@ -42,6 +42,56 @@ async function api(path: string, init: RequestInit = {}) {
   return data;
 }
 
+async function streamChatCompletion(payload: any, onDelta: (delta: { content?: string; reasoning?: string }) => void) {
+  const headers = new Headers({ 'content-type': 'application/json' });
+  headers.set('x-flexlab-management-token', mgmtToken());
+  const response = await fetch(`${API}/v1/chat/completions`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ ...payload, stream: true }),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    let message = text || `HTTP ${response.status}`;
+    try { message = JSON.parse(text)?.error?.message || message; } catch {}
+    throw new Error(message);
+  }
+  if (!response.body) throw new Error('Streaming yanıt gövdesi alınamadı.');
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const consume = (block: string) => {
+    const data = block.split(/\r?\n/).filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trimStart()).join('\n').trim();
+    if (!data || data === '[DONE]') return;
+    let chunk: any;
+    try { chunk = JSON.parse(data); } catch { return; }
+    if (chunk?.error?.message) throw new Error(chunk.error.message);
+    const delta = chunk?.choices?.[0]?.delta || {};
+    const content = typeof delta.content === 'string' ? delta.content : '';
+    const reasoning = typeof delta.reasoning_content === 'string' ? delta.reasoning_content : typeof delta.reasoning === 'string' ? delta.reasoning : '';
+    if (content || reasoning) onDelta({ content, reasoning });
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done }).replace(/\r\n/g, '\n');
+      let boundary = buffer.indexOf('\n\n');
+      while (boundary >= 0) {
+        const block = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        consume(block);
+        boundary = buffer.indexOf('\n\n');
+      }
+      if (done) break;
+    }
+    if (buffer.trim()) consume(buffer);
+  } finally {
+    try { await reader.cancel(); } catch {}
+  }
+}
+
 function bytes(n: number = 0) {
   if (!n) return '—';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -124,11 +174,36 @@ function Chat({ models, setErr }: { models: any[]; setErr: (s: string) => void }
   const selected = models.find((m) => m.id === model); const conversationTitle = messages.find((m) => m.role === 'user')?.content?.slice(0, 34) || 'Yeni sohbet';
   const reset = () => { setMessages([]); setText(''); };
   const send = async () => {
-    if (!text.trim() || !model || working) return; const q = text.trim(); const user = { role: 'user', content: q }; const history = [...messages, { role: 'user', content: web && !/@Web\b/i.test(q) ? `@Web ${q}` : q }]; setMessages((x) => [...x, user]); setText(''); setWorking(true);
-    try { const data = await api('/v1/chat/completions', { method: 'POST', body: JSON.stringify({ model, messages: history, stream: false, flexlab: { think: selected?.think ? think : false, think_level: selected?.thinkLevels && think ? level : undefined, web_search: web } }) }); const msg = data.choices?.[0]?.message || {}; setMessages((x) => [...x, { role: 'assistant', content: msg.content || '', reasoning: msg.reasoning_content || '' }]); } catch (e: any) { setErr(e.message); } finally { setWorking(false); }
+    if (!text.trim() || !model || working) return;
+    const q = text.trim();
+    const user = { role: 'user', content: q };
+    const cleanHistory = messages.filter((m) => !m.streaming).map((m) => ({ role: m.role, content: m.content }));
+    const history = [...cleanHistory, { role: 'user', content: web && !/@Web\b/i.test(q) ? `@Web ${q}` : q }];
+    const streamKey = `${Date.now()}-${Math.random()}`;
+    let content = '';
+    let reasoning = '';
+    setMessages((x) => [...x, user, { role: 'assistant', content: '', reasoning: '', streaming: true, streamKey }]);
+    setText('');
+    setWorking(true);
+    try {
+      await streamChatCompletion({
+        model,
+        messages: history,
+        flexlab: { think: selected?.think ? think : false, think_level: selected?.thinkLevels && think ? level : undefined, web_search: web },
+      }, (delta) => {
+        content += delta.content || '';
+        reasoning += delta.reasoning || '';
+        setMessages((rows) => rows.map((m) => m.streamKey === streamKey ? { ...m, content, reasoning } : m));
+      });
+    } catch (e: any) {
+      setErr(e.message);
+    } finally {
+      setMessages((rows) => rows.map((m) => m.streamKey === streamKey ? { ...m, streaming: false } : m));
+      setWorking(false);
+    }
   };
   if (!models.length) return <div className="centerState"><p>Sohbet için önce bir dil modeli kur veya yerel model ekle.</p></div>;
-  return <div className="chatPage"><aside className="conversationPanel"><div className="conversationHead"><span>Sohbetler</span><button onClick={reset} title="Yeni sohbet" aria-label="Yeni sohbet"><Plus size={16} /></button></div><div className="conversationList"><button className="conversation active">{conversationTitle}</button></div></aside><section className="chatMain"><header className="chatTopbar"><select value={model} onChange={(e) => setModel(e.target.value)}>{models.map((m) => <option value={m.id} key={m.id}>{m.name}</option>)}</select>{selected && <Caps m={selected} />}<span className="chatTopSpacer" /><span className="parameterLabel">Parametreler</span></header><div className="messageViewport">{messages.length === 0 ? <div className="chatEmpty"><HelixMark /><h2>Yerel modelinle konuş</h2><p>Mesajların seçtiğin modelle doğrudan kendi bilgisayarında işlenir.</p></div> : <div className="messageColumn">{messages.map((m, i) => <article className={`message ${m.role}`} key={i}><span className="messageRole">{m.role === 'user' ? 'Siz' : 'Asistan'}</span>{m.reasoning && <details className="reasoning"><summary>Düşünme süreci</summary><pre>{m.reasoning}</pre></details>}<pre>{m.content}</pre></article>)}{working && <article className="message assistant pending"><span className="messageRole">Asistan</span><p>Yanıt yazılıyor</p></article>}</div>}</div><footer className="composerArea"><div className="composerBox"><textarea value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }} placeholder={`${selected?.name || 'Model'} ile yazın…`} /><div className="composerTools">{selected?.think && <label className="toggleLabel"><input type="checkbox" checked={think} onChange={(e) => setThink(e.target.checked)} /><span className="switchUi" /><Brain size={14} className="thinkIcon" />Düşün</label>}{selected?.thinkLevels && think && <select className="miniSelect" value={level} onChange={(e) => setLevel(e.target.value)}><option value="low">Düşük</option><option value="medium">Orta</option><option value="high">Yüksek</option></select>}<label className="toggleLabel"><input type="checkbox" checked={web} onChange={(e) => setWeb(e.target.checked)} /><span className="switchUi" /><Globe size={14} />Web</label><Button className="sendButton" onClick={() => void send()} disabled={working || !text.trim()}><Send size={15} /> Gönder</Button></div></div><p className="composerHint">FlexLab Engine · Enter gönderir, Shift+Enter yeni satır</p></footer></section></div>;
+  return <div className="chatPage"><aside className="conversationPanel"><div className="conversationHead"><span>Sohbetler</span><button onClick={reset} title="Yeni sohbet" aria-label="Yeni sohbet"><Plus size={16} /></button></div><div className="conversationList"><button className="conversation active">{conversationTitle}</button></div></aside><section className="chatMain"><header className="chatTopbar"><select value={model} onChange={(e) => setModel(e.target.value)}>{models.map((m) => <option value={m.id} key={m.id}>{m.name}</option>)}</select>{selected && <Caps m={selected} />}<span className="chatTopSpacer" /><span className="parameterLabel">Parametreler</span></header><div className="messageViewport">{messages.length === 0 ? <div className="chatEmpty"><HelixMark /><h2>Yerel modelinle konuş</h2><p>Mesajların seçtiğin modelle doğrudan kendi bilgisayarında işlenir.</p></div> : <div className="messageColumn">{messages.map((m, i) => <article className={`message ${m.role}${m.streaming ? ' pending' : ''}`} key={m.streamKey || i}><span className="messageRole">{m.role === 'user' ? 'Siz' : 'Asistan'}</span>{m.reasoning && <details className="reasoning" open={m.streaming}><summary>Düşünme süreci</summary><pre>{m.reasoning}</pre></details>}{m.streaming && !m.content && !m.reasoning ? <p>Yanıt hazırlanıyor…</p> : <pre>{m.content}</pre>}</article>)}</div>}</div><footer className="composerArea"><div className="composerBox"><textarea value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }} placeholder={`${selected?.name || 'Model'} ile yazın…`} /><div className="composerTools">{selected?.think && <label className="toggleLabel"><input type="checkbox" checked={think} onChange={(e) => setThink(e.target.checked)} /><span className="switchUi" /><Brain size={14} className="thinkIcon" />Düşün</label>}{selected?.thinkLevels && think && <select className="miniSelect" value={level} onChange={(e) => setLevel(e.target.value)}><option value="low">Düşük</option><option value="medium">Orta</option><option value="high">Yüksek</option></select>}<label className="toggleLabel"><input type="checkbox" checked={web} onChange={(e) => setWeb(e.target.checked)} /><span className="switchUi" /><Globe size={14} />Web</label><Button className="sendButton" onClick={() => void send()} disabled={working || !text.trim()}><Send size={15} /> Gönder</Button></div></div><p className="composerHint">FlexLab Engine · Streaming açık · Enter gönderir, Shift+Enter yeni satır</p></footer></section></div>;
 }
 
 function PageHeader({ title, description }: { title: string; description: string }) { return <header className="pageHeader"><h1>{title}</h1><p>{description}</p></header>; }
