@@ -18,8 +18,9 @@ import {
   Upload,
 } from 'lucide-react';
 import './styles.css';
+import { Downloads, QuantDialog } from './download-ui';
 
-type Tab = 'chat' | 'discover' | 'models' | 'studio' | 'runtime' | 'server';
+type Tab = 'chat' | 'discover' | 'models' | 'studio' | 'runtime' | 'server' | 'downloads';
 const API = 'http://127.0.0.1:1234';
 
 function mgmtToken() {
@@ -137,6 +138,7 @@ function App() {
           ))}
         </nav>
         <div className="railBottom">
+          <button className={tab === 'downloads' ? 'active' : ''} onClick={() => setTab('downloads')} title="İndirilenler" aria-label="İndirilenler"><Download size={16} strokeWidth={1.6} /></button>
           <button className="railRefresh" onClick={() => void refresh()} title="Yenile" aria-label="Yenile"><RefreshCw size={15} strokeWidth={1.6} /></button>
           <span className={`serverDot ${server.serverEnabled ? 'on' : ''}`} title={server.serverEnabled ? 'API açık' : 'API kapalı'} />
           <p>FLEXLAB</p>
@@ -145,12 +147,13 @@ function App() {
 
       <main className="workspace">
         {err && <button className="errorToast" onClick={() => setErr('')}>{err}</button>}
-        {tab === 'chat' && <Chat models={models.filter((m) => m.kind === 'llm')} setErr={setErr} />}
+        {tab === 'chat' && <Chat models={models.filter((m) => m.kind === 'llm' && m.runtimeSupported !== false)} setErr={setErr} />}
         {tab === 'discover' && <Discover onDone={refresh} setErr={setErr} />}
         {tab === 'models' && <Models models={models} runtime={server.runtime} refresh={refresh} setErr={setErr} />}
-        {tab === 'studio' && <Studio models={models} setErr={setErr} />}
+        {tab === 'studio' && <Studio models={models.filter((m) => m.runtimeSupported !== false)} setErr={setErr} />}
         {tab === 'runtime' && <Runtime state={runtime} refresh={refresh} setErr={setErr} />}
         {tab === 'server' && <Server cfg={server} refresh={refresh} setErr={setErr} />}
+        {tab === 'downloads' && <Downloads setErr={setErr} onDone={refresh} />}
       </main>
     </div>
   );
@@ -272,7 +275,7 @@ function Discover({ onDone, setErr }: { onDone: () => Promise<void>; setErr: (s:
   const [q, setQ] = useState('');
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
-  const [job, setJob] = useState<any>(null);
+  const [installModel, setInstallModel] = useState<any>(null);
 
   const search = async () => {
     setLoading(true);
@@ -289,27 +292,6 @@ function Discover({ onDone, setErr }: { onDone: () => Promise<void>; setErr: (s:
   useEffect(() => { void search(); }, []);
 
   const visibleRows = rows.filter((m) => cap === 'all' || (cap === 'think' ? m.think : m.vision));
-
-  const download = async (m: any, quantId: string) => {
-    try {
-      const nextJob = await api('/api/models/download', { method: 'POST', body: JSON.stringify({ model: m, quantId }) });
-      setJob(nextJob);
-      const timer = setInterval(async () => {
-        try {
-          const current = await api(`/api/models/download/${nextJob.id}`);
-          setJob(current);
-          if (current.status === 'done' || current.status === 'error') {
-            clearInterval(timer);
-            await onDone();
-          }
-        } catch {
-          clearInterval(timer);
-        }
-      }, 1000);
-    } catch (e: any) {
-      setErr(e.message);
-    }
-  };
 
   return (
     <div className="page">
@@ -331,8 +313,6 @@ function Discover({ onDone, setErr }: { onDone: () => Promise<void>; setErr: (s:
         </div>
       </div>
 
-      {job && <div className={`downloadBar ${job.status === 'error' ? 'bad' : ''}`}><strong>{job.status}</strong><span>%{job.progress || 0}</span><span>{bytes(job.loadedBytes)} / {bytes(job.totalBytes)}</span><div className="progressTrack"><span style={{ width: `${Math.max(0, Math.min(100, job.progress || 0))}%` }} /></div>{job.error && <span>{job.error}</span>}</div>}
-
       <div className="pageScroll">
         <div className="catalogGrid">
           {visibleRows.map((m) => {
@@ -342,14 +322,15 @@ function Discover({ onDone, setErr }: { onDone: () => Promise<void>; setErr: (s:
                 <div className="cardTop"><div><h3>{m.name}</h3><p>{m.publisher}</p></div><Badge>{m.kind === 'llm' ? 'LLM' : m.kind}</Badge></div>
                 <p className="description">{m.description}</p>
                 <Caps m={m} />
-                <div className="quantOptions">{(m.quants || []).slice(0, 5).map((x: any) => <button key={x.id} onClick={() => void download(m, x.id)} disabled={m.runtimeSupported === false}>{x.label}</button>)}</div>
-                <div className="cardBottom"><span>{recommended ? `${recommended.label} · ${bytes(recommended.sizeBytes)}` : m.params || m.kind}</span><Button onClick={() => recommended && void download(m, recommended.id)} disabled={!recommended || m.runtimeSupported === false}><Download size={15} /> Kur</Button></div>
+                <div className="quantOptions">{(m.quants || []).slice(0, 5).map((x: any) => <span className="badge" key={x.id}>{x.label}</span>)}</div>
+                <div className="cardBottom"><span>{recommended ? `${recommended.label} · ${bytes(recommended.sizeBytes)}` : m.params || m.kind}</span><Button onClick={() => setInstallModel(m)} disabled={!recommended}><Download size={15} /> Kur</Button></div>
                 {m.unsupportedReason && <p className="warning">{m.unsupportedReason}</p>}
               </article>
             );
           })}
         </div>
       </div>
+      <QuantDialog model={installModel} onClose={() => setInstallModel(null)} onStarted={() => void onDone()} setErr={setErr} />
     </div>
   );
 }
@@ -373,12 +354,13 @@ function Models({ models, runtime, refresh, setErr }: { models: any[]; runtime: 
           {models.map((m) => (
             <article className="modelRow" key={m.id}>
               <div className="modelInfo">
-                <div className="modelTitleLine"><h3>{m.name}</h3><Badge tone={loaded.has(m.id) ? 'ok' : ''}>{loaded.has(m.id) ? 'bellekte' : 'kurulu'}</Badge><Badge>{m.runtime || m.kind}</Badge></div>
+                <div className="modelTitleLine"><h3>{m.name}</h3><Badge tone={loaded.has(m.id) ? 'ok' : ''}>{loaded.has(m.id) ? 'bellekte' : m.downloadOnly ? 'indirildi' : 'kurulu'}</Badge><Badge>{m.runtime || m.kind}</Badge></div>
                 <p>{m.hfId || m.publisher || 'Yerel model'} · {m.quant?.label || m.kind} · {bytes(m.quant?.sizeBytes)}</p>
                 <Caps m={m} />
+                {m.downloadOnly && <p className="warning">{m.unsupportedReason || 'Bu model indirildi ancak mevcut runtime ile çalıştırılamıyor.'}</p>}
               </div>
               <div className="modelActions">
-                {m.kind === 'llm' && <>
+                {m.kind === 'llm' && m.runtimeSupported !== false && <>
                   <Button onClick={() => void act('/api/models/load', { id: m.id, context_length: 8192, gpu_layers: 999, flash_attention: true, fit: true, ttl: 0, embedding: m.embedding })}><Upload size={15} /> {loaded.has(m.id) ? 'Yeniden yükle' : 'Yükle'}</Button>
                   {loaded.has(m.id) && <Button className="secondary" onClick={() => void act('/api/models/unload', { id: m.id })}>Unload</Button>}
                   <Button className="secondary" onClick={async () => { try { const data = await api('/api/models/estimate', { method: 'POST', body: JSON.stringify({ id: m.id, context: 8192, gpuLayers: 999 }) }); alert(`VRAM ≈ ${bytes(data.estimate.estimatedVramBytes)}\nRAM ≈ ${bytes(data.estimate.estimatedRamBytes)}\nVRAM fit: ${data.estimate.fitsVram}`); } catch (e: any) { setErr(e.message); } }}>Bellek</Button>
