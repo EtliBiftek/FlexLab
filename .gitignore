@@ -1,0 +1,9 @@
+node_modules/
+dist/
+release/
+*.log
+.env
+.env.*
+.flexlab-studio/
+.DS_Store
+Thumbs.db
