@@ -10,8 +10,28 @@
 .runtimeProgressStats .runtimeDetail { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .runtimeInstallProgress .progressTrack { width: 100%; min-width: 0; flex: none; height: 4px; }
 .runtimeInstallProgress .progressTrack span { transition: width .18s linear; }
+
+/* The downloads button used to inherit the browser's default white button style. */
+.railBottom > button { width: 44px; height: 44px; border: 0; border-radius: 12px; background: transparent; color: var(--muted); display: grid; place-items: center; transition: .15s ease; padding: 0; }
+.railBottom > button:hover, .railBottom > button.active { color: var(--fg); background: var(--elevated); }
+
+.liveSearchState { min-width: 78px; align-self: center; text-align: right; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.catalogMore { display: flex; justify-content: center; padding: 0 24px 28px; }
+.localDropZone { margin-bottom: 14px; min-height: 92px; border: 1px dashed var(--border-strong); border-radius: 14px; background: var(--surface); display: flex; align-items: center; gap: 14px; padding: 15px 16px; color: var(--muted); transition: .15s ease; }
+.localDropZone.dragOver { border-color: var(--accent); background: var(--elevated); color: var(--fg); transform: translateY(-1px); }
+.localDropZone > svg { flex: 0 0 auto; color: var(--accent); }
+.localDropZone > div { min-width: 0; flex: 1; display: grid; gap: 4px; }
+.localDropZone strong { color: var(--fg); font-size: 13px; font-weight: 500; }
+.localDropZone span { font-size: 11px; line-height: 1.4; }
+.localDialogBackdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 24px; background: rgba(0,0,0,.58); backdrop-filter: blur(6px); }
+.localDialog { width: min(560px, 94vw); display: grid; gap: 14px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface); padding: 18px; box-shadow: 0 24px 80px #0009; }
+.localDialog h2 { margin: 0; font-size: 17px; font-weight: 500; }
+.localDialog > p { margin: -7px 0 0; color: var(--muted); font-size: 12px; }
+.localDialogActions { display: flex; justify-content: flex-end; gap: 8px; }
+
 @media (max-width: 720px) {
   .runtimeRow { align-items: stretch; }
   .runtimeRow > .button { align-self: flex-start; }
   .runtimeProgressStats { flex-wrap: wrap; }
+  .localDropZone { align-items: flex-start; flex-wrap: wrap; }
 }
