@@ -7,7 +7,7 @@ import { getHfAuthHeaders, loadConfig } from './config.mjs';
 import { readGgufMetadata, capabilitiesFromMetadata } from './gguf.mjs';
 
 const jobs = new Map();
-const UA = 'FlexLab/0.4.0 (+local-ai-desktop)';
+const UA = 'FlexLab/0.4.4 (+local-ai-desktop)';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function safePath(root, rel) {
@@ -48,6 +48,25 @@ async function throttle(job, bytesInWindow, windowStartedAt) {
   return { bytesInWindow, windowStartedAt };
 }
 
+function publicHeaders(headers = {}) {
+  const out = { ...headers };
+  delete out.authorization;
+  delete out.Authorization;
+  return out;
+}
+
+async function fetchDownload(url, headers, existing) {
+  const h = { 'user-agent': UA, ...headers };
+  if (existing > 0) h.range = `bytes=${existing}-`;
+  let res = await fetch(url, { headers: h, redirect: 'follow' });
+  if ((res.status === 401 || res.status === 403) && (h.authorization || h.Authorization)) {
+    const noAuth = { 'user-agent': UA, ...publicHeaders(headers) };
+    if (existing > 0) noAuth.range = `bytes=${existing}-`;
+    res = await fetch(url, { headers: noAuth, redirect: 'follow' });
+  }
+  return { res, headers: h };
+}
+
 async function downloadFile(url, dest, { expected = 0, sha256Expected = '', headers = {}, job } = {}, onProgress) {
   await fsp.mkdir(path.dirname(dest), { recursive: true });
   const part = `${dest}.part`;
@@ -55,16 +74,16 @@ async function downloadFile(url, dest, { expected = 0, sha256Expected = '', head
   let existing = 0;
   try { existing = (await fsp.stat(part)).size; } catch {}
 
-  const baseHeaders = { 'user-agent': UA, ...headers };
-  if (existing > 0) baseHeaders.range = `bytes=${existing}-`;
-  let res = await fetch(url, { headers: baseHeaders, redirect: 'follow' });
+  let { res } = await fetchDownload(url, headers, existing);
   if (existing > 0 && res.status === 200) {
     await fsp.rm(part, { force: true });
     existing = 0;
-    delete baseHeaders.range;
-    res = await fetch(url, { headers: baseHeaders, redirect: 'follow' });
+    ({ res } = await fetchDownload(url, headers, existing));
   }
-  if (!res.ok || !res.body) throw new Error(`İndirme HTTP ${res.status}${res.status === 401 || res.status === 403 ? ' — gated/private model için Hugging Face token gerekli olabilir.' : ''}`);
+  if (!res.ok || !res.body) {
+    if (res.status === 401 || res.status === 403) throw new Error('Bu model Hugging Face tarafından erişim korumalı. Public modeller FlexLab’da token olmadan indirilebilir.');
+    throw new Error(`İndirme HTTP ${res.status}`);
+  }
 
   const contentLength = Number(res.headers.get('content-length') || 0);
   const total = expected || (contentLength ? existing + contentLength : 0);
@@ -123,8 +142,13 @@ function hfResolve(hfId, file, revision) {
 
 async function listRepoFiles(hfId, revision) {
   const auth = await getHfAuthHeaders();
-  const r = await fetch(`https://huggingface.co/api/models/${hfId}?blobs=true&revision=${encodeURIComponent(revision || 'main')}`, { headers: { 'user-agent': UA, ...auth } });
-  if (!r.ok) throw new Error(`Hugging Face model bilgisi alınamadı (${r.status})`);
+  const url = `https://huggingface.co/api/models/${hfId}?blobs=true&revision=${encodeURIComponent(revision || 'main')}`;
+  let r = await fetch(url, { headers: { 'user-agent': UA, ...auth } });
+  if ((r.status === 401 || r.status === 403) && auth.authorization) r = await fetch(url, { headers: { 'user-agent': UA } });
+  if (!r.ok) {
+    if (r.status === 401 || r.status === 403) throw new Error('Bu model Hugging Face tarafından erişim korumalı. Public modeller FlexLab’da token olmadan indirilebilir.');
+    throw new Error(`Hugging Face model bilgisi alınamadı (${r.status})`);
+  }
   const raw = await r.json();
   return { files: raw.siblings || [], sha: raw.sha || null };
 }
