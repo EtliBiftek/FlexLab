@@ -1,0 +1,17 @@
+.runtimeRow { align-items: flex-start; }
+.runtimeInfo { min-width: 0; flex: 1; }
+.runtimeInstallProgress { width: min(760px, 100%); margin-top: 10px; display: grid; gap: 7px; color: #a8c5a9; }
+.runtimeInstallProgress.bad { color: #dda5a1; }
+.runtimeProgressMeta, .runtimeProgressStats { display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 11px; color: inherit; }
+.runtimeProgressMeta span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.runtimeProgressMeta strong { flex: 0 0 auto; font-weight: 500; font-family: 'IBM Plex Mono', ui-monospace, monospace; }
+.runtimeProgressStats { color: var(--muted); }
+.runtimeProgressStats > span { white-space: nowrap; }
+.runtimeProgressStats .runtimeDetail { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.runtimeInstallProgress .progressTrack { width: 100%; min-width: 0; flex: none; height: 4px; }
+.runtimeInstallProgress .progressTrack span { transition: width .18s linear; }
+@media (max-width: 720px) {
+  .runtimeRow { align-items: stretch; }
+  .runtimeRow > .button { align-self: flex-start; }
+  .runtimeProgressStats { flex-wrap: wrap; }
+}
