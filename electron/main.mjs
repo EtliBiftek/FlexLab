@@ -1,7 +1,7 @@
 import { app, BrowserWindow, Menu, Tray, nativeImage, utilityProcess, ipcMain, shell, dialog } from "electron";
 import crypto from "node:crypto";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow = null;
@@ -22,6 +22,16 @@ app.on("second-instance", () => {
   }
 });
 
+function nativeFile(name) {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, "app.asar.unpacked", "native", name)
+    : path.join(__dirname, "..", "native", name);
+}
+
+async function localImportApi() {
+  return import(pathToFileURL(nativeFile("local-import.mjs")).href);
+}
+
 function pushNativeLog(prefix, data) {
   const text = String(data || "").trim();
   if (!text) return;
@@ -31,9 +41,7 @@ function pushNativeLog(prefix, data) {
 
 function startDaemon() {
   if (daemon) return daemon;
-  const serverPath = app.isPackaged
-    ? path.join(process.resourcesPath, "app.asar.unpacked", "native", "server.mjs")
-    : path.join(__dirname, "..", "native", "server.mjs");
+  const serverPath = nativeFile("server.mjs");
   daemon = utilityProcess.fork(serverPath, [], {
     serviceName: "FlexLab Native Runtime",
     stdio: "pipe",
@@ -199,6 +207,26 @@ ipcMain.handle("desktop:set-open-at-login", (_event, enabled) => {
 });
 ipcMain.handle("desktop:check-updates", () => checkGitHubRelease());
 ipcMain.handle("desktop:open-releases", () => shell.openExternal("https://github.com/EtliBiftek/FlexLab/releases/latest"));
+ipcMain.handle("desktop:choose-model-paths", async () => {
+  const result = await dialog.showOpenDialog(mainWindow || undefined, {
+    title: "Yerel model ekle",
+    buttonLabel: "Modeli ekle",
+    properties: ["openFile", "openDirectory", "multiSelections"],
+    filters: [
+      { name: "AI model files", extensions: ["gguf", "safetensors", "ckpt", "bin", "pt", "pth"] },
+      { name: "All files", extensions: ["*"] },
+    ],
+  });
+  return result.canceled ? [] : result.filePaths;
+});
+ipcMain.handle("desktop:import-model-paths", async (_event, paths) => {
+  const api = await localImportApi();
+  return api.importLocalModels(Array.isArray(paths) ? paths : []);
+});
+ipcMain.handle("desktop:update-model", async (_event, id, patch) => {
+  const api = await localImportApi();
+  return api.updateLocalModel(String(id || ""), patch || {});
+});
 
 if (process.argv.includes("--smoke-test")) {
   app.whenReady().then(async () => {
