@@ -1,6 +1,6 @@
 {
   "name": "flexlab",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "private": true,
   "type": "module",
   "description": "FlexLab — local multimodal AI studio, model manager, and OpenAI/LM Studio-compatible server.",
@@ -65,6 +65,6 @@
     "extraMetadata": {"main": "electron/main.mjs"},
     "win": {"target": ["nsis", "portable"]},
     "nsis": {"oneClick": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": true, "createStartMenuShortcut": true},
-    "asarUnpack": ["native/**/*"]
+    "asarUnpack": ["native/**/*", "node_modules/**/*"]
   }
 }
