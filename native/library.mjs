@@ -27,7 +27,7 @@ export async function removeInstalled(id) {
   const hit = lib.models.find((m) => m.id === id);
   lib.models = lib.models.filter((m) => m.id !== id);
   await saveLibrary(lib);
-  if (hit?.localDir) {
+  if (hit?.localDir && !hit.external) {
     await fs.rm(hit.localDir, { recursive: true, force: true }).catch(() => {});
   }
   return Boolean(hit);
