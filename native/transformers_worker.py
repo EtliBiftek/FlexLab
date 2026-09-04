@@ -4,10 +4,11 @@ import io
 import json
 import os
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import torch
-from transformers import AutoTokenizer, AutoProcessor, AutoModel, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoProcessor, AutoModel, AutoModelForCausalLM, TextIteratorStreamer
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--model', required=True)
@@ -98,21 +99,58 @@ def embed_texts(items):
     return vec.detach().cpu().tolist()
 
 
-def generate(messages, max_tokens=512, temperature=0.7):
+def generation_inputs(messages, max_tokens=512, temperature=0.7):
     prompt = messages_prompt(messages)
     tok = tokenizer or processor
     if tok is None:
         raise RuntimeError('Tokenizer/processor bulunamadı.')
     inputs = tok(prompt, return_tensors='pt')
     inputs = {k: v.to(DEVICE) if hasattr(v, 'to') else v for k, v in inputs.items()}
-    input_len = inputs.get('input_ids').shape[-1] if inputs.get('input_ids') is not None else 0
-    kwargs = dict(max_new_tokens=max(1, min(int(max_tokens or 512), 4096)), do_sample=float(temperature or 0) > 0, temperature=max(float(temperature or 0.7), 0.01), pad_token_id=getattr(tokenizer, 'eos_token_id', None))
+    kwargs = dict(
+        max_new_tokens=max(1, min(int(max_tokens or 512), 4096)),
+        do_sample=float(temperature or 0) > 0,
+        temperature=max(float(temperature or 0.7), 0.01),
+        pad_token_id=getattr(tokenizer, 'eos_token_id', None),
+    )
+    return tok, inputs, kwargs
+
+
+def generate(messages, max_tokens=512, temperature=0.7):
+    tok, inputs, kwargs = generation_inputs(messages, max_tokens, temperature)
+    input_ids = inputs.get('input_ids')
+    input_len = input_ids.shape[-1] if input_ids is not None else 0
     with torch.no_grad():
         output = model.generate(**inputs, **kwargs)
     seq = output[0]
     if input_len:
         seq = seq[input_len:]
     return tok.decode(seq, skip_special_tokens=True).strip()
+
+
+def generate_stream(messages, max_tokens=512, temperature=0.7):
+    tok, inputs, kwargs = generation_inputs(messages, max_tokens, temperature)
+    streamer = TextIteratorStreamer(tok, skip_prompt=True, skip_special_tokens=True, timeout=120.0)
+    failure = []
+
+    def runner():
+        try:
+            with torch.no_grad():
+                model.generate(**inputs, **kwargs, streamer=streamer)
+        except Exception as exc:
+            failure.append(exc)
+            try:
+                streamer.end()
+            except Exception:
+                pass
+
+    thread = threading.Thread(target=runner, daemon=True)
+    thread.start()
+    for text in streamer:
+        if text:
+            yield text
+    thread.join(timeout=1.0)
+    if failure:
+        raise failure[0]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -127,6 +165,11 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def send_sse(self, data):
+        raw = f"data: {data}\n\n".encode('utf-8')
+        self.wfile.write(raw)
+        self.wfile.flush()
+
     def do_GET(self):
         if self.path == '/health':
             return self.send_json(200, {'status': 'ok', 'runtime': 'transformers-python', 'mode': mode})
@@ -137,7 +180,27 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get('content-length') or 0)
             body = json.loads(self.rfile.read(length) or b'{}')
             if self.path == '/v1/chat/completions':
-                text = generate(body.get('messages') or [], body.get('max_tokens') or body.get('max_completion_tokens') or 512, body.get('temperature', 0.7))
+                max_tokens = body.get('max_tokens') or body.get('max_completion_tokens') or 512
+                temperature = body.get('temperature', 0.7)
+                if body.get('stream'):
+                    self.send_response(200)
+                    self.send_header('content-type', 'text/event-stream; charset=utf-8')
+                    self.send_header('cache-control', 'no-cache')
+                    self.send_header('connection', 'close')
+                    self.end_headers()
+                    try:
+                        first = {'id': 'chatcmpl-local', 'object': 'chat.completion.chunk', 'choices': [{'index': 0, 'delta': {'role': 'assistant'}, 'finish_reason': None}]}
+                        self.send_sse(json.dumps(first, ensure_ascii=False))
+                        for piece in generate_stream(body.get('messages') or [], max_tokens, temperature):
+                            chunk = {'id': 'chatcmpl-local', 'object': 'chat.completion.chunk', 'choices': [{'index': 0, 'delta': {'content': piece}, 'finish_reason': None}]}
+                            self.send_sse(json.dumps(chunk, ensure_ascii=False))
+                        final = {'id': 'chatcmpl-local', 'object': 'chat.completion.chunk', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]}
+                        self.send_sse(json.dumps(final, ensure_ascii=False))
+                        self.send_sse('[DONE]')
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+                    return
+                text = generate(body.get('messages') or [], max_tokens, temperature)
                 return self.send_json(200, {'id': 'chatcmpl-local', 'object': 'chat.completion', 'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': text}, 'finish_reason': 'stop'}], 'usage': {}})
             if self.path == '/v1/embeddings':
                 inp = body.get('input') or []
