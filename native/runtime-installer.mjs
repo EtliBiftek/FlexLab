@@ -7,6 +7,7 @@ import { RUNTIMES_DIR } from './config.mjs';
 
 const UA = 'FlexLab/0.4.0 (+local-ai-desktop)';
 const runtimeJobs = new Map();
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let nvidiaCache;
 
 async function exists(p) { try { await fs.access(p); return true; } catch { return false; } }
@@ -139,7 +140,7 @@ async function download(url, dest, job) {
       if (job) {
         job.loadedBytes = base + loaded;
         const total = Number(job.totalBytes || expected || 0);
-        if (total) job.progress = Math.min(80, Math.max(5, Math.round(5 + (job.loadedBytes / total) * 75)));
+        if (total) job.progress = Math.max(job.progress, Math.min(80, Math.max(5, Math.round(5 + (job.loadedBytes / total) * 75))));
         const now = Date.now();
         if (now - speedAt >= 500) {
           job.speedBps = Math.round(((loaded - speedBytes) * 1000) / (now - speedAt));
@@ -198,7 +199,7 @@ async function installFromGithub({ repo, dirName, exeNames, runtime }, job) {
   await fs.rm(archive, { force: true }).catch(() => {});
 
   if (companion) {
-    if (job) { job.status = 'downloading'; job.phase = `${companion.name} indiriliyor`; job.progress = Math.max(job.progress, 80); }
+    if (job) { job.status = 'downloading'; job.phase = `${companion.name} indiriliyor`; job.progress = Math.max(job.progress, 84); }
     const runtimeArchive = path.join(dir, companion.name);
     await download(companion.browser_download_url, runtimeArchive, job);
     await extract(runtimeArchive, dir, job);
@@ -230,11 +231,20 @@ export async function runtimeInstallState() {
   };
 }
 
+async function waitForRuntimeJob(job) {
+  if (!job) throw new Error('Bilinmeyen runtime.');
+  while (!['done', 'error'].includes(job.status)) await sleep(120);
+  if (job.status === 'error') throw new Error(job.error || `${job.name} kurulamadı.`);
+  return job.path;
+}
+
 export function ensureLlamaCpp(job) {
-  return installFromGithub({ repo: 'ggml-org/llama.cpp', dirName: 'llama.cpp', exeNames: process.platform === 'win32' ? ['llama-server.exe'] : ['llama-server'], runtime: 'llama' }, job);
+  if (job) return installFromGithub({ repo: 'ggml-org/llama.cpp', dirName: 'llama.cpp', exeNames: process.platform === 'win32' ? ['llama-server.exe'] : ['llama-server'], runtime: 'llama' }, job);
+  return waitForRuntimeJob(startRuntimeInstall('llama.cpp'));
 }
 export function ensureStableDiffusionCpp(job) {
-  return installFromGithub({ repo: 'leejet/stable-diffusion.cpp', dirName: 'stable-diffusion.cpp', exeNames: process.platform === 'win32' ? ['sd-cli.exe'] : ['sd-cli'], runtime: 'sd' }, job);
+  if (job) return installFromGithub({ repo: 'leejet/stable-diffusion.cpp', dirName: 'stable-diffusion.cpp', exeNames: process.platform === 'win32' ? ['sd-cli.exe'] : ['sd-cli'], runtime: 'sd' }, job);
+  return waitForRuntimeJob(startRuntimeInstall('stable-diffusion.cpp'));
 }
 
 function findSystemPython() {
@@ -254,13 +264,15 @@ function findSystemPython() {
 }
 
 export async function ensureMusicGenPython(job) {
+  if (!job) return waitForRuntimeJob(startRuntimeInstall('musicgen-python'));
+
   const root = path.join(RUNTIMES_DIR, 'musicgen-python');
   const venv = path.join(root, 'venv');
   const python = process.platform === 'win32' ? path.join(venv, 'Scripts', 'python.exe') : path.join(venv, 'bin', 'python');
   await fs.mkdir(root, { recursive: true });
 
   if (!await exists(python)) {
-    if (job) { job.status = 'installing'; job.phase = 'Python sanal ortamı hazırlanıyor'; job.progress = 8; }
+    job.status = 'installing'; job.phase = 'Python sanal ortamı hazırlanıyor'; job.progress = 8;
     const sys = findSystemPython();
     await runHidden(sys.cmd, [...sys.prefix, '-m', 'venv', venv], { job, phase: 'Python sanal ortamı hazırlanıyor' });
   }
@@ -272,18 +284,18 @@ export async function ensureMusicGenPython(job) {
     depsReady = false;
   }
   if (!depsReady) {
-    if (job) { job.status = 'installing'; job.phase = 'pip güncelleniyor'; job.progress = 25; }
+    job.status = 'installing'; job.phase = 'pip güncelleniyor'; job.progress = 25;
     await runHidden(python, ['-m', 'pip', 'install', '--upgrade', 'pip', '--disable-pip-version-check'], { job, phase: 'pip güncelleniyor' });
-    if (job) { job.phase = 'PyTorch ve MusicGen bağımlılıkları indiriliyor'; job.progress = 38; }
-    const pulse = job ? setInterval(() => { if (job.progress < 92) job.progress += 1; }, 4000) : null;
-    pulse?.unref?.();
+    job.phase = 'PyTorch ve MusicGen bağımlılıkları indiriliyor'; job.progress = 38;
+    const pulse = setInterval(() => { if (job.progress < 92) job.progress += 1; }, 4000);
+    pulse.unref?.();
     try {
       await runHidden(python, ['-m', 'pip', 'install', '--disable-pip-version-check', 'torch', 'transformers>=4.46', 'scipy', 'accelerate', 'sentencepiece', 'protobuf', 'safetensors'], { job, phase: 'PyTorch ve MusicGen bağımlılıkları indiriliyor' });
     } finally {
-      if (pulse) clearInterval(pulse);
+      clearInterval(pulse);
     }
   }
-  if (job) { job.phase = 'MusicGen runtime doğrulanıyor'; job.progress = 96; }
+  job.phase = 'MusicGen runtime doğrulanıyor'; job.progress = 96;
   return python;
 }
 
