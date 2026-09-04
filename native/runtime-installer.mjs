@@ -5,7 +5,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import extractZip from 'extract-zip';
 import { RUNTIMES_DIR } from './config.mjs';
 
-const UA = 'FlexLab/0.4.0 (+local-ai-desktop)';
+const UA = 'FlexLab/0.4.4 (+local-ai-desktop)';
 const runtimeJobs = new Map();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let nvidiaCache;
@@ -39,21 +39,17 @@ function scoreAsset(name, runtime) {
   const n = String(name || '').toLowerCase();
   if (!/\.zip$|\.tar\.gz$/.test(n)) return -999;
   if (/cudart|cuda-runtime|runtime-only/.test(n)) return -500;
-
   const win = process.platform === 'win32';
   const linux = process.platform === 'linux';
   const mac = process.platform === 'darwin';
   if (win && !/(?:^|[-_.])(win|windows)(?:[-_.]|$)/.test(n)) return -999;
   if (linux && !/(ubuntu|linux)/.test(n)) return -999;
   if (mac && !/(mac|macos|darwin)/.test(n)) return -999;
-
   if (process.arch === 'x64' && /(arm64|aarch64)/.test(n)) return -999;
   if (process.arch === 'arm64' && /(x64|x86_64)/.test(n)) return -999;
-
   let s = 50;
   if (process.arch === 'x64' && /(x64|x86_64)/.test(n)) s += 25;
   if (process.arch === 'arm64' && /(arm64|aarch64)/.test(n)) s += 25;
-
   if (hasNvidia()) {
     if (/cuda|cu12|cu13/.test(n)) s += 100;
     else if (/vulkan/.test(n)) s += 35;
@@ -63,16 +59,12 @@ function scoreAsset(name, runtime) {
     if (/vulkan/.test(n)) s += 55;
     if (/cpu|avx2/.test(n)) s += 35;
   }
-
   if (runtime === 'llama' && /server|llama/.test(n)) s += 5;
   return s;
 }
 
 function installableAssets(release, runtime) {
-  return (release?.assets || [])
-    .map((a) => ({ ...a, score: scoreAsset(a.name, runtime) }))
-    .filter((a) => a.score > 0)
-    .sort((a, b) => b.score - a.score);
+  return (release?.assets || []).map((a) => ({ ...a, score: scoreAsset(a.name, runtime) })).filter((a) => a.score > 0).sort((a, b) => b.score - a.score);
 }
 
 async function githubJson(url) {
@@ -85,7 +77,6 @@ async function releaseWithBinaries(repo, runtime, job) {
   if (job) { job.phase = 'Uygun prebuilt sürüm aranıyor'; job.progress = Math.max(job.progress, 2); }
   let release = await githubJson(`https://api.github.com/repos/${repo}/releases/latest`);
   if (installableAssets(release, runtime).length) return release;
-
   const pointer = (release.assets || []).find((a) => String(a.name || '').toLowerCase() === 'nightly-tag.txt');
   let tag = '';
   if (pointer?.browser_download_url) {
@@ -149,18 +140,13 @@ async function download(url, dest, job) {
         }
       }
     }
-  } finally {
-    await file.close();
-  }
+  } finally { await file.close(); }
   if (job) { job.loadedBytes = base + loaded; job.speedBps = 0; }
 }
 
 async function extract(archive, dir, job) {
   if (job) { job.status = 'extracting'; job.phase = 'Arşiv çıkarılıyor'; job.progress = Math.max(job.progress, 84); }
-  if (archive.toLowerCase().endsWith('.zip')) {
-    await extractZip(archive, { dir: path.resolve(dir) });
-    return;
-  }
+  if (archive.toLowerCase().endsWith('.zip')) { await extractZip(archive, { dir: path.resolve(dir) }); return; }
   await runHidden('tar', ['-xzf', archive, '-C', dir], { job, phase: 'Arşiv çıkarılıyor' });
 }
 
@@ -169,35 +155,23 @@ async function installFromGithub({ repo, dirName, exeNames, runtime }, job) {
   const existing = await walkFind(dir, exeNames);
   if (existing) return existing;
   await fs.mkdir(dir, { recursive: true });
-
   const release = await releaseWithBinaries(repo, runtime, job);
   const assets = installableAssets(release, runtime);
   const asset = assets[0];
   if (!asset) throw new Error(`${repo} için bu sistemde uygun prebuilt runtime bulunamadı.`);
-
   let companion = null;
   if (process.platform === 'win32' && hasNvidia() && /cuda|cu12|cu13/i.test(asset.name)) {
     const ver = String(asset.name).match(/cuda-([0-9.]+)/i)?.[1] || '';
-    companion = (release.assets || []).find((a) => {
-      const n = String(a.name || '');
-      return /cudart/i.test(n) && /win|windows/i.test(n) && /x64|x86_64/i.test(n) && (!ver || n.includes(`cuda-${ver}`));
-    }) || null;
+    companion = (release.assets || []).find((a) => { const n = String(a.name || ''); return /cudart/i.test(n) && /win|windows/i.test(n) && /x64|x86_64/i.test(n) && (!ver || n.includes(`cuda-${ver}`)); }) || null;
   }
-
   if (job) {
-    job.status = 'downloading';
-    job.phase = `${asset.name} indiriliyor`;
-    job.assetName = asset.name;
-    job.totalBytes = Number(asset.size || 0) + Number(companion?.size || 0);
-    job.loadedBytes = 0;
-    job.progress = 5;
+    job.status = 'downloading'; job.phase = `${asset.name} indiriliyor`; job.assetName = asset.name;
+    job.totalBytes = Number(asset.size || 0) + Number(companion?.size || 0); job.loadedBytes = 0; job.progress = 5;
   }
-
   const archive = path.join(dir, asset.name);
   await download(asset.browser_download_url, archive, job);
   await extract(archive, dir, job);
   await fs.rm(archive, { force: true }).catch(() => {});
-
   if (companion) {
     if (job) { job.status = 'downloading'; job.phase = `${companion.name} indiriliyor`; job.progress = Math.max(job.progress, 84); }
     const runtimeArchive = path.join(dir, companion.name);
@@ -205,11 +179,72 @@ async function installFromGithub({ repo, dirName, exeNames, runtime }, job) {
     await extract(runtimeArchive, dir, job);
     await fs.rm(runtimeArchive, { force: true }).catch(() => {});
   }
-
   if (job) { job.status = 'installing'; job.phase = 'Runtime doğrulanıyor'; job.progress = 96; }
   const exe = await walkFind(dir, exeNames);
   if (!exe) throw new Error(`${repo} indirildi fakat executable bulunamadı.`);
   return exe;
+}
+
+async function releaseAssets(release, predicate) {
+  const direct = (release.assets || []).find(predicate);
+  if (direct) return direct;
+  if (!release.assets_url) return null;
+  for (let page = 1; page <= 12; page++) {
+    const rows = await githubJson(`${release.assets_url}?per_page=100&page=${page}`);
+    const hit = rows.find(predicate);
+    if (hit) return hit;
+    if (rows.length < 100) break;
+  }
+  return null;
+}
+
+function pythonTarget() {
+  if (process.platform === 'win32') return process.arch === 'arm64' ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc';
+  if (process.platform === 'darwin') return process.arch === 'arm64' ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin';
+  return process.arch === 'arm64' ? 'aarch64-unknown-linux-gnu' : 'x86_64-unknown-linux-gnu';
+}
+
+async function ensurePortablePython(job) {
+  const root = path.join(RUNTIMES_DIR, 'python-standalone');
+  const names = process.platform === 'win32' ? ['python.exe'] : ['python3', 'python'];
+  const existing = await walkFind(root, names);
+  if (existing) return existing;
+  await fs.mkdir(root, { recursive: true });
+  if (job) { job.status = 'downloading'; job.phase = 'FlexLab Python runtime aranıyor'; job.progress = 3; job.detail = 'Sistem Python kurulumu gerekmiyor'; }
+  const release = await githubJson('https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest');
+  const target = pythonTarget();
+  const asset = await releaseAssets(release, (a) => {
+    const n = String(a.name || '').toLowerCase();
+    return n.startsWith('cpython-3.12.') && n.includes(`-${target.toLowerCase()}-`) && /install_only_stripped\.tar\.gz$/.test(n);
+  });
+  if (!asset) throw new Error(`FlexLab Python runtime bulunamadı (${target}).`);
+  if (job) { job.phase = `Python 3.12 indiriliyor`; job.assetName = asset.name; job.totalBytes = Number(asset.size || 0); job.loadedBytes = 0; job.progress = 5; }
+  const archive = path.join(root, asset.name);
+  await download(asset.browser_download_url, archive, job);
+  await extract(archive, root, job);
+  await fs.rm(archive, { force: true }).catch(() => {});
+  const python = await walkFind(root, names);
+  if (!python) throw new Error('Python runtime indirildi fakat executable bulunamadı.');
+  if (job) { job.status = 'installing'; job.phase = 'Python runtime doğrulanıyor'; job.progress = 90; }
+  await runHidden(python, ['-c', 'import sys; print(sys.version)'], { job, phase: 'Python runtime doğrulanıyor' });
+  return python;
+}
+
+async function findPython(job) {
+  const configured = process.env.FLEXLAB_PYTHON || process.env.HELIX_PYTHON;
+  const candidates = configured
+    ? [{ cmd: configured, prefix: [] }]
+    : process.platform === 'win32'
+      ? [{ cmd: 'py.exe', prefix: ['-3'] }, { cmd: 'python.exe', prefix: [] }, { cmd: 'python3.exe', prefix: [] }]
+      : [{ cmd: 'python3', prefix: [] }, { cmd: 'python', prefix: [] }];
+  for (const c of candidates) {
+    try {
+      execFileSync(c.cmd, [...c.prefix, '-c', 'import sys; print(sys.version_info[:2])'], { stdio: 'ignore', timeout: 5000, windowsHide: true });
+      return c;
+    } catch {}
+  }
+  const managed = await ensurePortablePython(job);
+  return { cmd: managed, prefix: [] };
 }
 
 export async function runtimeInstallState() {
@@ -219,11 +254,7 @@ export async function runtimeInstallState() {
   const llamaNames = process.platform === 'win32' ? ['llama-server.exe'] : ['llama-server'];
   const sdNames = process.platform === 'win32' ? ['sd-cli.exe'] : ['sd-cli'];
   const musicPython = process.platform === 'win32' ? path.join(musicRoot, 'venv', 'Scripts', 'python.exe') : path.join(musicRoot, 'venv', 'bin', 'python');
-  const [llamaPath, sdPath, musicInstalled] = await Promise.all([
-    walkFind(llamaDir, llamaNames),
-    walkFind(sdDir, sdNames),
-    exists(musicPython),
-  ]);
+  const [llamaPath, sdPath, musicInstalled] = await Promise.all([walkFind(llamaDir, llamaNames), walkFind(sdDir, sdNames), exists(musicPython)]);
   return {
     'llama.cpp': { installed: Boolean(llamaPath), path: llamaPath, job: runtimeJobs.get('llama.cpp') || null },
     'stable-diffusion.cpp': { installed: Boolean(sdPath), path: sdPath, job: runtimeJobs.get('stable-diffusion.cpp') || null },
@@ -247,55 +278,29 @@ export function ensureStableDiffusionCpp(job) {
   return waitForRuntimeJob(startRuntimeInstall('stable-diffusion.cpp'));
 }
 
-function findSystemPython() {
-  const configured = process.env.FLEXLAB_PYTHON || process.env.HELIX_PYTHON;
-  const candidates = configured
-    ? [{ cmd: configured, prefix: [] }]
-    : process.platform === 'win32'
-      ? [{ cmd: 'py.exe', prefix: ['-3'] }, { cmd: 'python.exe', prefix: [] }, { cmd: 'python3.exe', prefix: [] }]
-      : [{ cmd: 'python3', prefix: [] }, { cmd: 'python', prefix: [] }];
-  for (const c of candidates) {
-    try {
-      execFileSync(c.cmd, [...c.prefix, '-c', 'import sys; print(sys.version_info[:2])'], { stdio: 'ignore', timeout: 5000, windowsHide: true });
-      return c;
-    } catch {}
-  }
-  throw new Error('MusicGen için Python 3 bulunamadı. Python 3.10+ kurun veya FLEXLAB_PYTHON yolunu ayarlayın.');
-}
-
 export async function ensureMusicGenPython(job) {
   if (!job) return waitForRuntimeJob(startRuntimeInstall('musicgen-python'));
-
   const root = path.join(RUNTIMES_DIR, 'musicgen-python');
   const venv = path.join(root, 'venv');
   const python = process.platform === 'win32' ? path.join(venv, 'Scripts', 'python.exe') : path.join(venv, 'bin', 'python');
   await fs.mkdir(root, { recursive: true });
-
   if (!await exists(python)) {
-    job.status = 'installing'; job.phase = 'Python sanal ortamı hazırlanıyor'; job.progress = 8;
-    const sys = findSystemPython();
+    job.status = 'installing'; job.phase = 'Python çalışma ortamı hazırlanıyor'; job.progress = Math.max(job.progress, 8);
+    const sys = await findPython(job);
     await runHidden(sys.cmd, [...sys.prefix, '-m', 'venv', venv], { job, phase: 'Python sanal ortamı hazırlanıyor' });
   }
-
   let depsReady = true;
-  try {
-    await runHidden(python, ['-c', 'import torch, transformers, scipy, accelerate, sentencepiece'], { job });
-  } catch {
-    depsReady = false;
-  }
+  try { await runHidden(python, ['-c', 'import torch, transformers, scipy, accelerate, sentencepiece'], { job }); } catch { depsReady = false; }
   if (!depsReady) {
-    job.status = 'installing'; job.phase = 'pip güncelleniyor'; job.progress = 25;
+    job.status = 'installing'; job.phase = 'pip güncelleniyor'; job.progress = Math.max(job.progress, 25);
     await runHidden(python, ['-m', 'pip', 'install', '--upgrade', 'pip', '--disable-pip-version-check'], { job, phase: 'pip güncelleniyor' });
-    job.phase = 'PyTorch ve MusicGen bağımlılıkları indiriliyor'; job.progress = 38;
-    const pulse = setInterval(() => { if (job.progress < 92) job.progress += 1; }, 4000);
-    pulse.unref?.();
+    job.phase = 'PyTorch ve AI bağımlılıkları indiriliyor'; job.progress = Math.max(job.progress, 38);
+    const pulse = setInterval(() => { if (job.progress < 92) job.progress += 1; }, 4000); pulse.unref?.();
     try {
-      await runHidden(python, ['-m', 'pip', 'install', '--disable-pip-version-check', 'torch', 'transformers>=4.46', 'scipy', 'accelerate', 'sentencepiece', 'protobuf', 'safetensors'], { job, phase: 'PyTorch ve MusicGen bağımlılıkları indiriliyor' });
-    } finally {
-      clearInterval(pulse);
-    }
+      await runHidden(python, ['-m', 'pip', 'install', '--disable-pip-version-check', 'torch', 'transformers>=4.46', 'scipy', 'accelerate', 'sentencepiece', 'protobuf', 'safetensors'], { job, phase: 'PyTorch ve AI bağımlılıkları indiriliyor' });
+    } finally { clearInterval(pulse); }
   }
-  job.phase = 'MusicGen runtime doğrulanıyor'; job.progress = 96;
+  job.phase = 'Python AI runtime doğrulanıyor'; job.progress = 96;
   return python;
 }
 
@@ -304,41 +309,14 @@ export function startRuntimeInstall(name) {
   if (!known.includes(name)) return null;
   const previous = runtimeJobs.get(name);
   if (previous && !['done', 'error'].includes(previous.status)) return previous;
-
-  const job = {
-    id: crypto.randomUUID(),
-    name,
-    status: 'queued',
-    phase: 'Kurulum hazırlanıyor',
-    detail: '',
-    progress: 0,
-    loadedBytes: 0,
-    totalBytes: 0,
-    speedBps: 0,
-    assetName: null,
-    path: null,
-    error: null,
-    createdAt: Date.now(),
-  };
+  const job = { id: crypto.randomUUID(), name, status: 'queued', phase: 'Kurulum hazırlanıyor', detail: '', progress: 0, loadedBytes: 0, totalBytes: 0, speedBps: 0, assetName: null, path: null, error: null, createdAt: Date.now() };
   runtimeJobs.set(name, job);
-
   void (async () => {
     try {
-      const p = name === 'llama.cpp'
-        ? await ensureLlamaCpp(job)
-        : name === 'stable-diffusion.cpp'
-          ? await ensureStableDiffusionCpp(job)
-          : await ensureMusicGenPython(job);
-      job.path = p;
-      job.status = 'done';
-      job.phase = 'Kurulum tamamlandı';
-      job.progress = 100;
-      job.speedBps = 0;
+      const p = name === 'llama.cpp' ? await ensureLlamaCpp(job) : name === 'stable-diffusion.cpp' ? await ensureStableDiffusionCpp(job) : await ensureMusicGenPython(job);
+      job.path = p; job.status = 'done'; job.phase = 'Kurulum tamamlandı'; job.progress = 100; job.speedBps = 0;
     } catch (e) {
-      job.status = 'error';
-      job.phase = 'Kurulum başarısız';
-      job.error = e?.message || String(e);
-      job.speedBps = 0;
+      job.status = 'error'; job.phase = 'Kurulum başarısız'; job.error = e?.message || String(e); job.speedBps = 0;
     }
   })();
   return job;
