@@ -14,11 +14,11 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
-          cache: npm
+          package-manager-cache: false
       - name: Install dependencies
         run: npm install --no-audit --no-fund
       - name: Typecheck
