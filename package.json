@@ -1,6 +1,6 @@
 {
   "name": "flexlab",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "private": true,
   "type": "module",
   "description": "FlexLab — local multimodal AI studio, model manager, and OpenAI/LM Studio-compatible server.",
