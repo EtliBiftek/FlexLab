@@ -1,6 +1,6 @@
 {
   "name": "flexlab",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "type": "module",
   "description": "FlexLab — local multimodal AI studio, model manager, and OpenAI/LM Studio-compatible server.",
@@ -12,7 +12,7 @@
     "dev:real": "node scripts/dev-real.mjs",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "check:native": "node --check native/server.mjs && node --check native/llama-manager.mjs && node --check native/downloader.mjs && node --check native/image-manager.mjs && node --check native/mcp.mjs",
+    "check:native": "node --check native/server.mjs && node --check native/llama-manager.mjs && node --check native/downloader.mjs && node --check native/image-manager.mjs && node --check native/mcp.mjs && node --check electron/main.mjs",
     "desktop": "electron .",
     "desktop:dev": "node scripts/desktop-dev.mjs",
     "desktop:pack": "npm run build && electron-builder --dir --publish never",
@@ -40,8 +40,7 @@
     "react-dom": "^19.2.0",
     "tailwind-merge": "^3.5.0",
     "zod": "^4.4.0",
-    "zustand": "^5.0.0",
-    "electron-updater": "^6.6.2"
+    "zustand": "^5.0.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.0",
@@ -65,7 +64,6 @@
     "extraMetadata": {"main": "electron/main.mjs"},
     "win": {"target": ["nsis", "portable"]},
     "nsis": {"oneClick": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": true, "createStartMenuShortcut": true},
-    "publish": [{"provider": "github", "owner": "EtliBiftek", "repo": "FlexLab"}],
     "asarUnpack": ["native/**/*"]
   }
 }

@@ -3,7 +3,6 @@ name: Build FlexLab
 on:
   push:
     branches: [main]
-    tags: ['v*']
   workflow_dispatch:
 
 permissions:
@@ -28,15 +27,23 @@ jobs:
       - name: Validate native runtime
         run: npm run check:native
       - name: Build desktop
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         run: npm run desktop:build
-      - name: Build and publish release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Smoke test packaged executable
+        shell: pwsh
+        run: |
+          & "release/win-unpacked/FlexLab.exe" --smoke-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Publish GitHub Release
+        if: startsWith(github.event.head_commit.message, 'release:')
+        shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          npm run build
-          npx electron-builder --win nsis portable --publish always
+          $version = node -p "require('./package.json').version"
+          $tag = "v$version"
+          $installer = "release/FlexLab Setup $version.exe"
+          $portable = "release/FlexLab $version.exe"
+          gh release create $tag "$installer#Windows Installer (x64)" "$portable#Windows Portable (x64)" --target "${{ github.sha }}" --title "FlexLab $version" --generate-notes
       - uses: actions/upload-artifact@v4
         with:
           name: FlexLab-Windows
